@@ -9,6 +9,7 @@ do -- BEGIN LIB BLOCK
 -- local type     = type
 -- local rawequal = rawequal
 -- local tostring = tostring
+-- local error = error
 
 local E_TYPE_NIL     = 1
 local E_TYPE_BOOLEAN = 2
@@ -58,6 +59,8 @@ end
 
 local serialize_trusted_obj = nil
 do
+	-- local error = error
+	
 	local valid_types = {
 		["o"] = E_TYPE_BOOLEAN,
 		["u"] = E_TYPE_NUMBER,
@@ -80,8 +83,75 @@ do
 	end
 end
 
-local can_serialize_table = function(invalid_type, table_obj)
-	-- TODO
+local can_serialize_table = nil
+do
+	local tremove = table.remove
+	local E_STATE_NEXT = 1
+	local E_STATE_KEY = 2
+	local E_STATE_VALUE = 3
+	can_serialize_table = function(invalid_type, table_obj)
+		local seen_tables = {[table_obj] = true}
+		local stack = {nil, nil, nil}
+		local stack_size = 3
+		local key = nil
+		local xtype = nil
+		local value = nil
+		local state = E_STATE_NEXT
+		while stack_size > 0 do
+			if state == E_STATE_NEXT then
+				-- get key
+				key = next(table_obj, key)
+				if rawequal(key, nil) then
+					state = tremove(stack, stack_size)
+					key = tremove(stack, stack_size - 1)
+					table_obj = tremove(stack, stack_size - 2)
+					stack_size = stack_size - 3
+				else
+					state = E_STATE_KEY
+				end
+			elseif state == E_STATE_KEY then
+				-- check key
+				xtype = can_serialize_obj(key)
+				if not xtype then
+					invalid_type.mode = "key"
+					invalid_type.str_type = type(key)
+					return false
+				elseif xtype == E_TYPE_TABLE and not seen_tables[key] then
+					seen_tables[key] = true
+					stack[stack_size + 1] = table_obj
+					stack[stack_size + 2] = key
+					stack_size = stack_size + 3
+					stack[stack_size] = E_STATE_VALUE
+					table_obj = key
+					key = nil
+					state = E_STATE_NEXT
+				else
+					state = E_STATE_VALUE
+				end
+			else
+				-- check value
+				-- assert(state == E_STATE_VALUE)
+				value = table_obj[key]
+				xtype = can_serialize_obj(value)
+				if not xtype then
+					invalid_type.mode = "value"
+					invalid_type.str_type = type(value)
+					return false
+				elseif xtype == E_TYPE_TABLE and not seen_tables[value] then
+					seen_tables[value] = true
+					stack[stack_size + 1] = table_obj
+					stack[stack_size + 2] = key
+					stack_size = stack_size + 3
+					stack[stack_size] = E_STATE_NEXT
+					key = nil
+					table_obj = value
+				end
+				state = E_STATE_NEXT
+				value = nil
+			end
+		end
+		return true
+	end
 end
 
 local table_to_string = function(table_obj)
